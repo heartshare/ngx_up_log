@@ -3387,18 +3387,12 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
     if(ngx_strncasecmp(content_type->data, (u_char*) MULTIPART_FORM_DATA_STRING,
         sizeof(MULTIPART_FORM_DATA_STRING) - 1)) {
 
-        if(ulcf->raw_uploads) {
-          
-          upload_ctx->is_file = 1;
-          upload_ctx->unencoded = 1;
-          upload_ctx->raw_input = 1;
-          upload_ctx->data_handler = upload_process_raw_buf;
-          return NGX_OK;
-        }
+          ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
+              "Content-Type is: %V", content_type);
 
-        if(!ulcf->resumable_uploads) {
+        if(!ulcf->resumable_uploads && !ulcf->raw_uploads) {
             ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
-                "Content-Type is not multipart/form-data and resumable uploads are off: %V", content_type);
+                "Content-Type is not multipart/form-data and resumable or raw uploads are off: %V", content_type);
             return NGX_HTTP_UNSUPPORTED_MEDIA_TYPE;
         }
         
@@ -3406,95 +3400,105 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
          * Content-Type is not multipart/form-data,
          * look for Content-Disposition header now
          */
-        part = &headers_in->headers.part;
-        header = part->elts;
+         part = &headers_in->headers.part;
+         header = part->elts;
+         
+        if(ulcf->resumable_uploads) {
+          
+          for (i = 0;;i++) {
+              if (i >= part->nelts) {
+                  if (part->next == NULL) {
+                    break;
+                  }
 
-        for (i = 0;;i++) {
-            if (i >= part->nelts) {
-                if (part->next == NULL) {
-                  break;
-                }
+                  part = part->next;
+                  header = part->elts;
+                  i = 0;
+              }
 
-                part = part->next;
-                header = part->elts;
-                i = 0;
-            }
+              if(!strncasecmp(CONTENT_DISPOSITION_STRING, (char*)header[i].key.data, sizeof(CONTENT_DISPOSITION_STRING) - 1 - 1)) {
+                  if(upload_parse_content_disposition(upload_ctx, &header[i].value)) {
+                      ngx_log_error(NGX_LOG_INFO, upload_ctx->log, 0,
+                          "invalid Content-Disposition header");
+                      return NGX_ERROR;
+                  }
 
-            if(!strncasecmp(CONTENT_DISPOSITION_STRING, (char*)header[i].key.data, sizeof(CONTENT_DISPOSITION_STRING) - 1 - 1)) {
-                if(upload_parse_content_disposition(upload_ctx, &header[i].value)) {
-                    ngx_log_error(NGX_LOG_INFO, upload_ctx->log, 0,
-                        "invalid Content-Disposition header");
-                    return NGX_ERROR;
-                }
-
-                upload_ctx->is_file = 1;
-                upload_ctx->unencoded = 1;
-                upload_ctx->raw_input = 1;
+                  upload_ctx->is_file = 1;
+                  upload_ctx->unencoded = 1;
+                  upload_ctx->raw_input = 1;
         
-                upload_ctx->data_handler = upload_process_raw_buf;
-            }else if(!strncasecmp(SESSION_ID_STRING, (char*)header[i].key.data, sizeof(SESSION_ID_STRING) - 1 - 1)
-                || !strncasecmp(X_SESSION_ID_STRING, (char*)header[i].key.data, sizeof(X_SESSION_ID_STRING) - 1 - 1))
-            {
-                if(header[i].value.len == 0) {
-                    ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                                   "empty Session-ID in header");
-                    return NGX_ERROR;
-                }
+                  upload_ctx->data_handler = upload_process_raw_buf;
+              }else if(!strncasecmp(SESSION_ID_STRING, (char*)header[i].key.data, sizeof(SESSION_ID_STRING) - 1 - 1)
+                  || !strncasecmp(X_SESSION_ID_STRING, (char*)header[i].key.data, sizeof(X_SESSION_ID_STRING) - 1 - 1))
+              {
+                  if(header[i].value.len == 0) {
+                      ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                     "empty Session-ID in header");
+                      return NGX_ERROR;
+                  }
 
-                if(ngx_http_upload_validate_session_id(&header[i].value) != NGX_OK) {
-                    ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                                   "invalid Session-ID in header");
-                    return NGX_ERROR;
-                }
+                  if(ngx_http_upload_validate_session_id(&header[i].value) != NGX_OK) {
+                      ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                     "invalid Session-ID in header");
+                      return NGX_ERROR;
+                  }
 
-                upload_ctx->session_id = header[i].value;
+                  upload_ctx->session_id = header[i].value;
 
-                ngx_log_debug1(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                               "session id %V", &upload_ctx->session_id);
-            }else if(!strncasecmp(CONTENT_RANGE_STRING, (char*)header[i].key.data, sizeof(CONTENT_RANGE_STRING) - 1 - 1) 
-                || !strncasecmp(X_CONTENT_RANGE_STRING, (char*)header[i].key.data, sizeof(X_CONTENT_RANGE_STRING) - 1 - 1))
-            {
-                if(header[i].value.len == 0) {
-                    ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                                   "empty Content-Range in part header");
-                    return NGX_ERROR;
-                }
+                  ngx_log_debug1(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                 "session id %V", &upload_ctx->session_id);
+              }else if(!strncasecmp(CONTENT_RANGE_STRING, (char*)header[i].key.data, sizeof(CONTENT_RANGE_STRING) - 1 - 1) 
+                  || !strncasecmp(X_CONTENT_RANGE_STRING, (char*)header[i].key.data, sizeof(X_CONTENT_RANGE_STRING) - 1 - 1))
+              {
+                  if(header[i].value.len == 0) {
+                      ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                     "empty Content-Range in part header");
+                      return NGX_ERROR;
+                  }
 
-                if(strncasecmp((char*)header[i].value.data, BYTES_UNIT_STRING, sizeof(BYTES_UNIT_STRING) - 1)) {
-                    ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                                   "unsupported range unit");
-                    return NGX_ERROR;
-                }
+                  if(strncasecmp((char*)header[i].value.data, BYTES_UNIT_STRING, sizeof(BYTES_UNIT_STRING) - 1)) {
+                      ngx_log_debug0(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                     "unsupported range unit");
+                      return NGX_ERROR;
+                  }
 
-                s.data = (u_char*)(char*)header[i].value.data + sizeof(BYTES_UNIT_STRING) - 1;
-                s.len = header[i].value.len - sizeof(BYTES_UNIT_STRING) + 1;
+                  s.data = (u_char*)(char*)header[i].value.data + sizeof(BYTES_UNIT_STRING) - 1;
+                  s.len = header[i].value.len - sizeof(BYTES_UNIT_STRING) + 1;
 
-                if(ngx_http_upload_parse_range(&s, &upload_ctx->content_range_n) != NGX_OK) {
-                    ngx_log_debug2(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                                   "invalid range %V (%V)", &s, &header[i].value);
-                    return NGX_ERROR;
-                }
+                  if(ngx_http_upload_parse_range(&s, &upload_ctx->content_range_n) != NGX_OK) {
+                      ngx_log_debug2(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                     "invalid range %V (%V)", &s, &header[i].value);
+                      return NGX_ERROR;
+                  }
 
-                ngx_log_debug3(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
-                               "partial content, range %O-%O/%O", upload_ctx->content_range_n.start, 
-                               upload_ctx->content_range_n.end, upload_ctx->content_range_n.total);
+                  ngx_log_debug3(NGX_LOG_DEBUG_CORE, upload_ctx->log, 0,
+                                 "partial content, range %O-%O/%O", upload_ctx->content_range_n.start, 
+                                 upload_ctx->content_range_n.end, upload_ctx->content_range_n.total);
 
-                if(ulcf->max_file_size != 0 && upload_ctx->content_range_n.total > ulcf->max_file_size) {
-                    ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
-                                  "entity length is too big");
-                    return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
-                }
+                  if(ulcf->max_file_size != 0 && upload_ctx->content_range_n.total > ulcf->max_file_size) {
+                      ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
+                                    "entity length is too big");
+                      return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+                  }
 
-                upload_ctx->partial_content = 1;
-            }
+                  upload_ctx->partial_content = 1;
+              }
+          }
+
+          if(!upload_ctx->unencoded) {
+              ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
+                             "Content-Type is not multipart/form-data and no Content-Disposition header found");
+              return NGX_HTTP_UNSUPPORTED_MEDIA_TYPE;
+          }
+          
+        }else{
+          upload_ctx->is_file = 1;
+          upload_ctx->unencoded = 1;
+          upload_ctx->raw_input = 1;
+
+          upload_ctx->data_handler = upload_process_raw_buf;
         }
-
-        if(!upload_ctx->unencoded) {
-            ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
-                           "Content-Type is not multipart/form-data and no Content-Disposition header found");
-            return NGX_HTTP_UNSUPPORTED_MEDIA_TYPE;
-        }
-
+        
         upload_ctx->content_type = *content_type;
 
         boundary = ngx_next_temp_number(0);
