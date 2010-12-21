@@ -149,6 +149,7 @@ typedef struct {
     ngx_flag_t                    forward_args;
     ngx_flag_t                    tame_arrays;
     ngx_flag_t                    resumable_uploads;
+    ngx_flag_t                    raw_uploads;
     size_t                        limit_rate;
 
     unsigned int                  md5:1;
@@ -585,6 +586,17 @@ static ngx_command_t  ngx_http_upload_commands[] = { /* {{{ */
        ngx_conf_set_flag_slot,
        NGX_HTTP_LOC_CONF_OFFSET,
        offsetof(ngx_http_upload_loc_conf_t, resumable_uploads),
+       NULL },
+
+     /*
+      * Specifies whether a resumable upload can accept request without a session ID
+      */
+     { ngx_string("raw_uploads"),
+       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LMT_CONF|NGX_HTTP_LIF_CONF
+                         |NGX_CONF_FLAG,
+       ngx_conf_set_flag_slot,
+       NGX_HTTP_LOC_CONF_OFFSET,
+       offsetof(ngx_http_upload_loc_conf_t, raw_uploads),
        NULL },
 
     /*
@@ -1885,6 +1897,7 @@ ngx_http_upload_create_loc_conf(ngx_conf_t *cf)
     conf->forward_args = NGX_CONF_UNSET;
     conf->tame_arrays = NGX_CONF_UNSET;
     conf->resumable_uploads = NGX_CONF_UNSET;
+    conf->raw_uploads = NGX_CONF_UNSET;
 
     conf->buffer_size = NGX_CONF_UNSET_SIZE;
     conf->merge_buffer_size = NGX_CONF_UNSET_SIZE;
@@ -1982,6 +1995,11 @@ ngx_http_upload_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     if(conf->resumable_uploads == NGX_CONF_UNSET) {
         conf->resumable_uploads = (prev->resumable_uploads != NGX_CONF_UNSET) ?
             prev->resumable_uploads : 0;
+    }
+
+    if(conf->raw_uploads == NGX_CONF_UNSET) {
+        conf->raw_uploads = (prev->raw_uploads != NGX_CONF_UNSET) ?
+            prev->raw_uploads : 0;
     }
 
     if(conf->field_templates == NULL) {
@@ -3369,11 +3387,21 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
     if(ngx_strncasecmp(content_type->data, (u_char*) MULTIPART_FORM_DATA_STRING,
         sizeof(MULTIPART_FORM_DATA_STRING) - 1)) {
 
+        if(ulcf->raw_uploads) {
+          
+          upload_ctx->is_file = 1;
+          upload_ctx->unencoded = 1;
+          upload_ctx->raw_input = 1;
+          upload_ctx->data_handler = upload_process_raw_buf;
+          return NGX_OK;
+        }
+
         if(!ulcf->resumable_uploads) {
             ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
                 "Content-Type is not multipart/form-data and resumable uploads are off: %V", content_type);
             return NGX_HTTP_UNSUPPORTED_MEDIA_TYPE;
         }
+        
         /*
          * Content-Type is not multipart/form-data,
          * look for Content-Disposition header now
