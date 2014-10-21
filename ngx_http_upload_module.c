@@ -3387,6 +3387,8 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
     if(ngx_strncasecmp(content_type->data, (u_char*) MULTIPART_FORM_DATA_STRING,
         sizeof(MULTIPART_FORM_DATA_STRING) - 1)) {
 
+          ngx_log_debug0(NGX_LOG_INFO, upload_ctx->log, 0, "##><## multipart_form_data_string handler called!");
+
           ngx_log_error(NGX_LOG_ERR, upload_ctx->log, 0,
               "Content-Type is: %V", content_type);
 
@@ -3403,8 +3405,8 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
          part = &headers_in->headers.part;
          header = part->elts;
          
-        if(ulcf->resumable_uploads) {
-          
+        if(ulcf->resumable_uploads) {  
+          ngx_log_debug0(NGX_LOG_INFO, upload_ctx->log, 0, "##><## inner loop started");
           for (i = 0;;i++) {
               if (i >= part->nelts) {
                   if (part->next == NULL) {
@@ -3491,7 +3493,8 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
               return NGX_HTTP_UNSUPPORTED_MEDIA_TYPE;
           }
           
-        }else{
+        } else {          
+          ngx_log_debug0(NGX_LOG_INFO, upload_ctx->log, 0, "#><# passing handler as raw_buf");
           upload_ctx->is_file = 1;
           upload_ctx->unencoded = 1;
           upload_ctx->raw_input = 1;
@@ -3525,6 +3528,7 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
         // Find colon in content type string, which terminates mime type
         mime_type_end_ptr = (u_char*) ngx_strchr(content_type->data, ';');
 
+        ngx_log_debug0(NGX_LOG_INFO, upload_ctx->log, 0, "#><# detecting mime type");
         upload_ctx->boundary.data = 0;
 
         if(mime_type_end_ptr == NULL) {
@@ -3550,6 +3554,8 @@ static ngx_int_t upload_parse_request_headers(ngx_http_upload_ctx_t *upload_ctx,
             return NGX_UPLOAD_MALFORMED;
         }
     }
+
+    ngx_log_debug0(NGX_LOG_INFO, upload_ctx->log, 0, "#><# closing operations");
 
     // Allocate memory for entire boundary plus \r\n-- plus terminating character
     upload_ctx->boundary.len = boundary_end_ptr - boundary_start_ptr + 4;
